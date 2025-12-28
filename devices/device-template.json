@@ -1,0 +1,72 @@
+{
+  "device": {
+    "codename": "DEVICE_CODENAME",
+    "full_name": "Device Full Name",
+    "manufacturer": "manufacturer_name",
+    "common_platform": "common-platform (optional, use null if not applicable)"
+  },
+  "repositories": {
+    "device_tree": {
+      "url": "https://github.com/your-org/android_device_manufacturer_codename.git",
+      "branch": "lineage-23.0",
+      "path": "device/manufacturer/codename"
+    },
+    "device_common_tree": {
+      "url": "https://github.com/your-org/android_device_manufacturer_common.git",
+      "branch": "lineage-23.0",
+      "path": "device/manufacturer/common",
+      "optional": true
+    },
+    "vendor_tree": {
+      "url": "https://github.com/your-org/proprietary_vendor_manufacturer_codename.git",
+      "branch": "lineage-23.0",
+      "path": "vendor/manufacturer/codename"
+    },
+    "vendor_common_tree": {
+      "url": "https://github.com/your-org/proprietary_vendor_manufacturer_common.git",
+      "branch": "lineage-23.0",
+      "path": "vendor/manufacturer/common",
+      "optional": true
+    },
+    "hardware_oplus": {
+      "url": "https://github.com/your-org/android_hardware_oplus.git",
+      "branch": "lineage-23.0",
+      "path": "hardware/oplus",
+      "optional": true
+    },
+    "kernel_tree": {
+      "url": "https://github.com/your-org/android_kernel_manufacturer_platform.git",
+      "branch": "lineage-23.0",
+      "path": "kernel/manufacturer/platform"
+    },
+    "camera_tree": {
+      "url": "https://gitlab.com/your-org/proprietary_vendor_camera.git",
+      "branch": "lineage-23.0",
+      "path": "vendor/camera",
+      "optional": true
+    },
+    "hardware_dolby": {
+      "url": "https://github.com/your-org/hardware_dolby.git",
+      "branch": "16",
+      "path": "hardware/dolby",
+      "optional": true
+    },
+    "signing_keys": {
+      "url": "https://github.com/your-username/signing-keys.git",
+      "branch": "master",
+      "path": "vendor/lineage-priv",
+      "optional": true
+    }
+  },
+  "build": {
+    "variant": "userdebug",
+    "gms_variant": "vanilla",
+    "build_type": "-b"
+  },
+  "environment": {
+    "ALLOW_MISSING_DEPENDENCIES": "true",
+    "BUILD_BROKEN_USES_BUILD_COPY_HEADERS": "true",
+    "BUILD_BROKEN_DUP_RULES": "true",
+    "BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES": "true"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "device": {
+    "codename": "spartan",
+    "full_name": "Realme GT Neo 3T",
+    "manufacturer": "realme"
+  },
+  "build": {
+    "variant": "user",
+    "target_release": "bp3a"
+  },
+  "environment": {
+    "UNSAFE_DISABLE_HIDDENAPI_FLAGS": "true",
+    "SKIP_ABI_CHECKS": "true"
+  },
+  "repositories": {
+    "device_tree": {
+      "url": "https://github.com/AOSP-Spartan/android_device_realme_spartan.git",
+      "branch": "sixteen-qpr1",
+      "path": "device/realme/spartan"
+    },
+    "device_common_tree": {
+      "url": "https://github.com/AOSP-Spartan/android_device_realme_sm8250-common.git",
+      "branch": "sixteen-qpr1",
+      "path": "device/realme/sm8250-common"
+    },
+    "vendor_tree": {
+      "url": "https://github.com/AOSP-Spartan/proprietary_vendor_realme_spartan.git",
+      "branch": "sixteen-qpr1",
+      "path": "vendor/realme/spartan"
+    },
+    "vendor_common_tree": {
+      "url": "https://github.com/AOSP-Spartan/proprietary_vendor_realme_sm8250-common.git",
+      "branch": "sixteen-qpr1",
+      "path": "vendor/realme/sm8250-common"
+    },
+    "hardware_oplus": {
+      "url": "https://github.com/AOSP-Spartan/android_hardware_oplus.git",
+      "branch": "sixteen-qpr1",
+      "path": "hardware/oplus"
+    },
+    "kernel_tree": {
+      "url": "https://github.com/bijoyv9/android_kernel_realme_sm8250.git",
+      "branch": "phoeniX-AOSP",
+      "path": "kernel/realme/sm8250"
+    },
+    "camera_tree": {
+      "url": "https://gitlab.com/ryukftw/proprietary_vendor_oplus_camera.git",
+      "branch": "lineage-23.1",
+      "path": "vendor/oplus/camera"
+    },
+    "hardware_dolby": {
+      "url": "https://github.com/bijoyv9/hardware_dolby.git",
+      "branch": "lineage-23.0",
+      "path": "hardware/dolby"
+    },
+    "signing_keys": {
+      "url": "https://github.com/AOSP-Spartan/android_vendor_lineage-priv.git",
+      "branch": "master",
+      "path": "vendor/lineage-priv"
+    },
+    "phoenix_console": {
+      "url": "https://github.com/bijoyv9/packages_apps_phoeniX-Console.git",
+      "branch": "16",
+      "path": "packages/apps/phoeniX-Console"
+    }
+  }
+}
