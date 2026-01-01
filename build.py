@@ -691,41 +691,65 @@ mka pixelos -j{cores} 2>&1 | tee {log_file}
         print_status("Calculating SHA256 checksum...")
         sha256_hash = self._calculate_sha256(self.output_file)
 
-        print_status("Getting GoFile server...")
+        # Try to get best server from API, then fall back to hardcoded list
+        servers = []
         try:
+            print_status("Getting optimal GoFile server...")
             response = requests.get("https://api.gofile.io/servers", timeout=10)
-            server = response.json()["data"]["servers"][0]["name"]
+            data = response.json()
+            if data.get("status") == "ok" and data.get("data", {}).get("servers"):
+                servers = [srv["name"] for srv in data["data"]["servers"]]
+                print_status(f"Got {len(servers)} servers from API")
         except Exception as e:
-            print_error(f"Failed to get GoFile server: {e}")
+            print_warning(f"Could not fetch servers from API: {e}")
+
+        # Add hardcoded fallback servers
+        fallback_servers = ["store1", "store2", "store3", "store4", "store5", "store6"]
+        for server in fallback_servers:
+            if server not in servers:
+                servers.append(server)
+
+        if not servers:
+            print_error("No GoFile servers available")
             return
 
-        print_status(f"Uploading to {server}.gofile.io...")
-        try:
-            with open(self.output_file, 'rb') as f:
-                response = requests.post(
-                    f"https://{server}.gofile.io/uploadFile",
-                    files={"file": f},
-                    timeout=3600  # 1 hour timeout for large files
-                )
+        # Try each server until one succeeds
+        upload_success = False
+        for i, server in enumerate(servers):
+            print_status(f"Trying server {server} ({i+1}/{len(servers)})...")
+            try:
+                with open(self.output_file, 'rb') as f:
+                    response = requests.post(
+                        f"https://{server}.gofile.io/uploadFile",
+                        files={"file": f},
+                        timeout=3600  # 1 hour timeout for large files
+                    )
 
-            result = response.json()
-            if result.get("status") == "ok":
-                self.gofile_download_link = result["data"]["downloadPage"]
+                result = response.json()
+                if result.get("status") == "ok":
+                    self.gofile_download_link = result["data"]["downloadPage"]
+                    upload_success = True
 
-                # Display file details
-                file_size = self.output_file.stat().st_size / (1024 * 1024)
-                print()
-                print(f"{Colors.GREEN}File Details:{Colors.NC}")
-                print(f"  File: {self.output_file.name}")
-                print(f"  Size: {file_size:.2f} MB")
-                print(f"  SHA256: {sha256_hash}")
-                print(f"  Download: {self.gofile_download_link}")
-                print()
-            else:
-                print_error(f"Upload failed: {result.get('error', 'Unknown error')}")
+                    # Display file details
+                    file_size = self.output_file.stat().st_size / (1024 * 1024)
+                    print()
+                    print(f"{Colors.GREEN}Upload successful to {server}!{Colors.NC}")
+                    print(f"{Colors.GREEN}File Details:{Colors.NC}")
+                    print(f"  File: {self.output_file.name}")
+                    print(f"  Size: {file_size:.2f} MB")
+                    print(f"  SHA256: {sha256_hash}")
+                    print(f"  Download: {self.gofile_download_link}")
+                    print()
+                    break
+                else:
+                    print_warning(f"Server {server} returned error: {result.get('error', 'Unknown')}")
 
-        except Exception as e:
-            print_error(f"Failed to upload file: {e}")
+            except Exception as e:
+                print_warning(f"Failed to upload to {server}: {e}")
+                continue
+
+        if not upload_success:
+            print_error("Upload failed on all available servers")
 
     def _calculate_sha256(self, file_path: Path) -> str:
         """Calculate SHA256 checksum of file"""
