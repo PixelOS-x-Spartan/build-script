@@ -165,17 +165,13 @@ class TelegramNotifier:
             print_warning(f"Failed to update message: {e}")
             return False
 
-    def send_document(self, file_path: Path, caption: str = "") -> bool:
+    def send_document(self, file_path: Path) -> bool:
         """Send document file to Telegram"""
         try:
             with open(file_path, 'rb') as f:
                 response = requests.post(
                     f"{self.base_url}/sendDocument",
-                    data={
-                        "chat_id": self.chat_id,
-                        "caption": caption,
-                        "parse_mode": "HTML"
-                    },
+                    data={"chat_id": self.chat_id},
                     files={"document": f},
                     timeout=30
                 )
@@ -343,7 +339,6 @@ class BuildOrchestrator:
         self.build_dir = build_dir
         self.gofile_download_link: Optional[str] = None
         self.current_log_file: Optional[Path] = None
-        self.error_log_file = Path(f"/tmp/build_error_{os.getpid()}.txt")
 
         # Set notifier's orchestrator reference
         if self.notifier:
@@ -438,109 +433,25 @@ class BuildOrchestrator:
                 self.cleanup()
 
     def _send_error_logs(self, exception: Exception):
-        """Send error logs to Telegram (both out/error.log and generated report)"""
+        """Send out/error.log to Telegram"""
         if not self.notifier:
-            print_warning("Notifier not configured, skipping error log upload")
             return
 
         error_log_path = self.build_dir / "out" / "error.log"
-        device_name = self.config.get_device_codename()
-
-        # Always try to send out/error.log if it exists
         if error_log_path.exists() and error_log_path.stat().st_size > 0:
-            print_status(f"Found out/error.log ({error_log_path.stat().st_size} bytes), sending to Telegram...")
-            try:
-                success = self.notifier.send_document(
-                    error_log_path,
-                    caption=f"❌ <b>Build failed for {device_name}</b>\n\n<b>Error:</b> {str(exception)}\n\nSee attached <code>error.log</code> from build system."
-                )
-                if success:
-                    print_success("out/error.log sent successfully")
-                else:
-                    print_warning("Failed to send out/error.log")
-            except Exception as send_error:
-                print_warning(f"Exception while sending out/error.log: {send_error}")
-
-        # Always generate and send detailed error report
-        print_status("Generating detailed error report...")
-        if self._capture_error_log(exception):
-            if self.error_log_file.exists():
-                print_status(f"Sending detailed error report to Telegram ({self.error_log_file.stat().st_size} bytes)...")
-                try:
-                    success = self.notifier.send_document(
-                        self.error_log_file,
-                        caption=f"❌ <b>Detailed error report for {device_name}</b>\n\n<b>Error:</b> {str(exception)}\n\nThis report includes build log tail and error keyword matches."
-                    )
-                    if success:
-                        print_success("Detailed error report sent successfully")
-                    else:
-                        print_warning("Failed to send detailed error report")
-                except Exception as send_error:
-                    print_warning(f"Exception while sending error report: {send_error}")
+            print_status(f"Sending out/error.log ({error_log_path.stat().st_size} bytes) to Telegram...")
+            self.notifier.send_document(error_log_path)
         else:
-            print_warning("Failed to generate detailed error report")
-
-    def _capture_error_log(self, exception: Exception):
-        """Capture error details and save to error log file"""
-        try:
-            with open(self.error_log_file, 'w', encoding='utf-8') as error_file:
-                # Write exception details
-                error_file.write("=" * 60 + "\n")
-                error_file.write("BUILD ERROR REPORT\n")
-                error_file.write("=" * 60 + "\n\n")
-                error_file.write(f"Error: {str(exception)}\n")
-                error_file.write(f"Type: {type(exception).__name__}\n")
-                error_file.write(f"Device: {self.config.get_device_codename()}\n")
-                error_file.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-
-                # If there's a current log file, extract relevant lines
-                if self.current_log_file and self.current_log_file.exists():
-                    error_file.write("=" * 60 + "\n")
-                    error_file.write("BUILD LOG (Last 500 lines)\n")
-                    error_file.write("=" * 60 + "\n\n")
-
-                    # Read file once and process both sections
-                    with open(self.current_log_file, 'r', encoding='utf-8', errors='replace') as log:
-                        all_lines = log.readlines()
-
-                    # Get last 500 lines
-                    last_lines = all_lines[-500:] if len(all_lines) > 500 else all_lines
-                    error_file.writelines(last_lines)
-
-                    # Add error keywords search from all lines
-                    error_file.write("\n" + "=" * 60 + "\n")
-                    error_file.write("ERROR LINES FROM BUILD LOG\n")
-                    error_file.write("=" * 60 + "\n\n")
-
-                    error_keywords = ['error:', 'Error:', 'ERROR:', 'FAILED', 'failed:', 'ninja: build stopped']
-                    error_lines = [line for line in all_lines if any(keyword in line for keyword in error_keywords)]
-
-                    if error_lines:
-                        error_file.writelines(error_lines)
-                    else:
-                        error_file.write("No specific error keywords found in log.\n")
-
-            print_status(f"Error log saved to {self.error_log_file}")
-            return True
-        except Exception as e:
-            print_warning(f"Failed to capture error log: {e}")
-            return False
+            print_warning("out/error.log not found or empty")
 
     def cleanup(self):
         """Clean up temporary log files"""
-        temp_files = [self.error_log_file]
-
-        # Add current log file if it's a temp file in /tmp
-        if self.current_log_file and str(self.current_log_file).startswith('/tmp/'):
-            temp_files.append(self.current_log_file)
-
-        for temp_file in temp_files:
-            if temp_file and Path(temp_file).exists():
-                try:
-                    Path(temp_file).unlink()
-                    print_status(f"Cleaned up temporary file: {temp_file}")
-                except Exception as e:
-                    print_warning(f"Failed to clean up {temp_file}: {e}")
+        if self.current_log_file and str(self.current_log_file).startswith('/tmp/') and self.current_log_file.exists():
+            try:
+                self.current_log_file.unlink()
+                print_status(f"Cleaned up temporary file: {self.current_log_file}")
+            except Exception as e:
+                print_warning(f"Failed to clean up {self.current_log_file}: {e}")
 
     def _notify(self, status: str, extra_info: str = ""):
         """Helper to send/update notification (non-blocking)"""
@@ -578,7 +489,7 @@ class BuildOrchestrator:
 
         # Sync sources (use tee to show output and log it)
         print_status(f"Syncing sources with {SYNC_JOBS} jobs (this may take a while)...")
-        sync_cmd = f"repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j{SYNC_JOBS} 2>&1 | tee {log_file}"
+        sync_cmd = f"set -o pipefail; repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j{SYNC_JOBS} 2>&1 | tee {log_file}"
         result = subprocess.run(
             ["bash", "-c", sync_cmd],
             cwd=self.build_dir
@@ -661,7 +572,7 @@ class BuildOrchestrator:
 
         # Run build in bash with sourcing (use tee to show output and log it)
         build_script = f"""
-set -e
+set -eo pipefail
 cd {self.build_dir}
 source build/envsetup.sh
 lunch {lunch_target}
