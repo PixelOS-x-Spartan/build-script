@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-PixelOS Build Script
-Automated ROM building with Telegram notifications and GoFile upload
+Android Build Script
+
 """
 
 import os
@@ -20,21 +20,8 @@ from typing import Optional, Dict, Any, Tuple
 import requests
 
 # Constants
-ROM_NAME = "PixelOS"
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_BUILD_DIR = Path.home() / "pos"
-MANIFEST_URL = "https://github.com/PixelOS-AOSP/android_manifest.git"
-MANIFEST_BRANCH = "sixteen-qpr1"
-SYNC_JOBS = 24
-
-# Android version mapping
-ANDROID_VERSIONS = {
-    "bp3a": "16 QPR1",
-    "bp2a": "16",
-    "ap3a": "15 QPR3",
-    "ap2a": "15 QPR2",
-    "ap1a": "15 QPR1",
-}
+DEFAULT_BUILD_DIR = Path.home() / "rom"
 
 # ANSI color codes
 class Colors:
@@ -59,6 +46,78 @@ def print_warning(msg: str):
 def print_error(msg: str):
     """Print error message"""
     print(f"{Colors.RED}[ERROR]{Colors.NC} {msg}")
+
+
+class RomConfig:
+    """Loads and validates JSON ROM configuration"""
+
+    def __init__(self, rom_or_path: str):
+        self.config_data: Dict[str, Any] = {}
+        self._load_config(rom_or_path)
+        self._validate()
+
+    def _load_config(self, rom_or_path: str):
+        """Load configuration from ROM name or JSON path"""
+        config_path = Path(rom_or_path)
+        if not config_path.exists():
+            config_path = SCRIPT_DIR / "roms" / f"{rom_or_path}.json"
+
+        if not config_path.exists():
+            raise FileNotFoundError(f"ROM config not found: {rom_or_path}")
+
+        print_status(f"Loading ROM configuration from {config_path}")
+
+        with open(config_path, 'r') as f:
+            self.config_data = json.load(f)
+
+        print_success(f"ROM configuration loaded: {self.get_name()}")
+
+    def _validate(self):
+        """Validate required fields in config"""
+        required = ["name", "manifest", "build", "output"]
+        for field in required:
+            if field not in self.config_data:
+                raise ValueError(f"Missing required field in ROM config: {field}")
+        for field in ["url", "branch"]:
+            if field not in self.config_data["manifest"]:
+                raise ValueError(f"Missing manifest.{field} in ROM config")
+        for field in ["envsetup", "lunch", "command"]:
+            if field not in self.config_data["build"]:
+                raise ValueError(f"Missing build.{field} in ROM config")
+        if "pattern" not in self.config_data["output"]:
+            raise ValueError("Missing output.pattern in ROM config")
+
+    def get_name(self) -> str:
+        return self.config_data["name"]
+
+    def get_manifest_url(self) -> str:
+        return self.config_data["manifest"]["url"]
+
+    def get_manifest_branch(self) -> str:
+        return self.config_data["manifest"]["branch"]
+
+    def get_sync_jobs(self) -> int:
+        return self.config_data.get("sync_jobs", 24)
+
+    def get_envsetup(self) -> str:
+        return self.config_data["build"]["envsetup"]
+
+    def get_lunch_command(self, device: str, target_release: str, variant: str) -> str:
+        return self.config_data["build"]["lunch"].format(
+            device=device, target_release=target_release, variant=variant
+        )
+
+    def get_build_command(self) -> str:
+        return self.config_data["build"]["command"]
+
+    def get_clean_command(self) -> str:
+        return self.config_data["build"].get("clean_command", "make clean")
+
+    def get_installclean_command(self) -> str:
+        return self.config_data["build"].get("installclean_command", "make installclean")
+
+    def get_output_pattern(self) -> str:
+        return self.config_data["output"]["pattern"]
 
 
 class BuildConfig:
@@ -117,11 +176,12 @@ class BuildConfig:
 class TelegramNotifier:
     """Handles Telegram API communication for build notifications"""
 
-    def __init__(self, bot_token: str, chat_id: str, config: BuildConfig, orchestrator=None):
+    def __init__(self, bot_token: str, chat_id: str, config: BuildConfig, rom_config: RomConfig, orchestrator=None):
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         self.chat_id = chat_id
         self.message_id: Optional[int] = None
         self.config = config
+        self.rom_config = rom_config
         self.orchestrator = orchestrator
 
     def send_message(self, text: str) -> bool:
@@ -190,14 +250,11 @@ class TelegramNotifier:
         device = self.config.get_device_codename()
         device_name = self.config.get_device_name()
         variant = self.config.get_build_variant()
+        rom_name = self.rom_config.get_name()
 
         # Get system info
         username = os.getenv('USER', 'unknown')
         arch = platform.machine()
-
-        # Map Android version
-        target_release = self.config.get_target_release()
-        android_version = ANDROID_VERSIONS.get(target_release, "Unknown")
 
         # Get ROM version
         version = "Building..."
@@ -208,13 +265,12 @@ class TelegramNotifier:
         status_text = self._format_status(status, progress_display)
 
         # Build HTML message
-        message = f"""🚀 <b>Build {status}</b> for <b>{ROM_NAME}</b>
+        message = f"""🚀 <b>Build {status}</b> for <b>{rom_name}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━
 📱 <b>Device:</b> {device} ({device_name})
 👤 <b>User:</b> {username}
 🔢 <b>Ver:</b> {version}
 🔧 <b>Variant:</b> {variant}
-📦 <b>Android:</b> {android_version}
 🏗 <b>Arch:</b> {arch}
 ━━━━━━━━━━━━━━━━━━━━━━━
 📊 <b>Status:</b> {status_text}"""
@@ -227,7 +283,8 @@ class TelegramNotifier:
             return None
 
         filename = self.orchestrator.output_file.name
-        match = re.search(r'PixelOS[_-](.+?)\.zip', filename)
+        rom_name = re.escape(self.rom_config.get_name())
+        match = re.search(rf'{rom_name}[_-](.+?)\.zip', filename, re.IGNORECASE)
         return match.group(1) if match else None
 
     def _format_status(self, status: str, progress_display: str) -> str:
@@ -331,8 +388,9 @@ class ProgressMonitor:
 class BuildOrchestrator:
     """Main build workflow coordinator"""
 
-    def __init__(self, config: BuildConfig, notifier: Optional[TelegramNotifier], build_dir: Path):
+    def __init__(self, config: BuildConfig, rom_config: RomConfig, notifier: Optional[TelegramNotifier], build_dir: Path):
         self.config = config
+        self.rom_config = rom_config
         self.notifier = notifier
         self.start_time = time.time()
         self.output_file: Optional[Path] = None
@@ -477,10 +535,14 @@ class BuildOrchestrator:
         """Initialize and sync ROM sources"""
         os.chdir(self.build_dir)
 
+        manifest_url = self.rom_config.get_manifest_url()
+        manifest_branch = self.rom_config.get_manifest_branch()
+        sync_jobs = self.rom_config.get_sync_jobs()
+
         # Initialize repo
         print_status("Initializing repository...")
         result = subprocess.run(
-            ["repo", "init", "-u", MANIFEST_URL, "-b", MANIFEST_BRANCH, "--git-lfs"],
+            ["repo", "init", "-u", manifest_url, "-b", manifest_branch, "--git-lfs"],
             capture_output=True,
             text=True
         )
@@ -488,8 +550,8 @@ class BuildOrchestrator:
             raise RuntimeError(f"Failed to initialize repository: {result.stderr}")
 
         # Sync sources (use tee to show output and log it)
-        print_status(f"Syncing sources with {SYNC_JOBS} jobs (this may take a while)...")
-        sync_cmd = f"set -o pipefail; repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j{SYNC_JOBS} 2>&1 | tee {log_file}"
+        print_status(f"Syncing sources with {sync_jobs} jobs (this may take a while)...")
+        sync_cmd = f"set -o pipefail; repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j{sync_jobs} 2>&1 | tee {log_file}"
         result = subprocess.run(
             ["bash", "-c", sync_cmd],
             cwd=self.build_dir
@@ -538,7 +600,7 @@ class BuildOrchestrator:
         print_success(f"Successfully cloned {total} repositories")
 
     def _build_rom(self, log_file: Path, installclean: bool, clean: bool):
-        """Build ROM with mka"""
+        """Build ROM"""
         os.chdir(self.build_dir)
 
         # Set environment variables from config
@@ -551,19 +613,21 @@ class BuildOrchestrator:
         device = self.config.get_device_codename()
         variant = self.config.get_build_variant()
         target_release = self.config.get_target_release()
-        lunch_target = f"custom_{device}-{target_release}-{variant}"
+        envsetup = self.rom_config.get_envsetup()
+        lunch_cmd = self.rom_config.get_lunch_command(device, target_release, variant)
+        build_cmd = self.rom_config.get_build_command()
 
         print_status("Sourcing build environment...")
-        print_status(f"Running lunch {lunch_target}...")
+        print_status(f"Running {lunch_cmd}...")
 
         # Determine clean command
         clean_cmd = ""
         if clean:
-            clean_cmd = "make clean"
-            print_status("Running make clean (full clean)...")
+            clean_cmd = self.rom_config.get_clean_command()
+            print_status(f"Running {clean_cmd}...")
         elif installclean:
-            clean_cmd = "make installclean"
-            print_status("Running make installclean...")
+            clean_cmd = self.rom_config.get_installclean_command()
+            print_status(f"Running {clean_cmd}...")
 
         # Build command
         cores = os.cpu_count() or 8
@@ -574,10 +638,10 @@ class BuildOrchestrator:
         build_script = f"""
 set -eo pipefail
 cd {self.build_dir}
-source build/envsetup.sh
-lunch {lunch_target}
+source {envsetup}
+{lunch_cmd}
 {clean_cmd}
-mka pixelos -j{cores} 2>&1 | tee {log_file}
+{build_cmd} -j{cores} 2>&1 | tee {log_file}
 """
 
         result = subprocess.run(
@@ -590,7 +654,8 @@ mka pixelos -j{cores} 2>&1 | tee {log_file}
 
         # Find output file
         output_dir = self.build_dir / "out" / "target" / "product" / device
-        zip_files = list(output_dir.glob("*PixelOS*.zip")) + list(output_dir.glob("*pixelos*.zip"))
+        output_pattern = self.rom_config.get_output_pattern()
+        zip_files = list(output_dir.glob(output_pattern))
 
         if zip_files:
             self.output_file = zip_files[0]
@@ -723,9 +788,11 @@ def get_telegram_credentials() -> Tuple[Optional[str], Optional[str]]:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description="PixelOS Build Script with Telegram notifications and GoFile upload"
+        description="ROM Build Script with Telegram notifications and GoFile upload"
     )
     parser.add_argument("device", help="Device codename or path to JSON config")
+    parser.add_argument("--rom", default="pixelos",
+                       help="ROM name or path to ROM JSON config (default: pixelos)")
     parser.add_argument("--skip-sync", action="store_true",
                        help="Skip source sync")
     parser.add_argument("--skip-clone", action="store_true",
@@ -738,8 +805,8 @@ def main():
                        help="Full clean build (make clean)")
     parser.add_argument("--clean-repos", action="store_true",
                        help="Clean device repos before cloning")
-    parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR,
-                       help=f"Build directory (default: {DEFAULT_BUILD_DIR})")
+    parser.add_argument("--build-dir", type=Path, default=None,
+                       help="Build directory (default: ~/rom)")
 
     args = parser.parse_args()
 
@@ -749,13 +816,23 @@ def main():
         print_error("Use --installclean for incremental rebuild or --clean for full clean")
         sys.exit(1)
 
+    # Load ROM config
+    try:
+        rom_config = RomConfig(args.rom)
+    except Exception as e:
+        print_error(f"Failed to load ROM config: {e}")
+        sys.exit(1)
+
+    rom_name = rom_config.get_name()
+    build_dir = args.build_dir or DEFAULT_BUILD_DIR
+
     # Display header
     print(f"{Colors.BLUE}================================{Colors.NC}")
-    print(f"{Colors.BLUE}  PixelOS Custom ROM Builder  {Colors.NC}")
+    print(f"{Colors.BLUE}  {rom_name} ROM Builder  {Colors.NC}")
     print(f"{Colors.BLUE}================================{Colors.NC}")
     print()
 
-    # Load config
+    # Load device config
     try:
         config = BuildConfig(args.device)
     except Exception as e:
@@ -764,13 +841,14 @@ def main():
 
     # Display build configuration
     print("Build Configuration:")
-    print(f"  ROM: {ROM_NAME}")
+    print(f"  ROM: {rom_name}")
     print(f"  Device: {config.get_device_codename()} ({config.get_device_name()})")
-    print(f"  Build Directory: {args.build_dir}")
-    print(f"  Manifest Branch: {MANIFEST_BRANCH}")
-    print(f"  Sync Jobs: {SYNC_JOBS}")
+    print(f"  Build Directory: {build_dir}")
+    print(f"  Manifest Branch: {rom_config.get_manifest_branch()}")
+    print(f"  Sync Jobs: {rom_config.get_sync_jobs()}")
     print(f"  Build Variant: {config.get_build_variant()}")
     print(f"  Target Release: {config.get_target_release()}")
+    print(f"  Build Command: {rom_config.get_build_command()}")
     print(f"  Skip Sync: {args.skip_sync}")
     print(f"  Skip Clone: {args.skip_clone}")
     print(f"  Skip Upload: {args.skip_upload}")
@@ -794,10 +872,10 @@ def main():
     # Create notifier
     notifier = None
     if bot_token and chat_id:
-        notifier = TelegramNotifier(bot_token, chat_id, config)
+        notifier = TelegramNotifier(bot_token, chat_id, config, rom_config)
 
     # Run build
-    orchestrator = BuildOrchestrator(config, notifier, args.build_dir)
+    orchestrator = BuildOrchestrator(config, rom_config, notifier, build_dir)
     orchestrator.run(
         skip_sync=args.skip_sync,
         skip_clone=args.skip_clone,

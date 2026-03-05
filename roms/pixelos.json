@@ -1,0 +1,18 @@
+{
+  "name": "PixelOS",
+  "manifest": {
+    "url": "https://github.com/PixelOS-AOSP/android_manifest.git",
+    "branch": "sixteen-qpr1"
+  },
+  "sync_jobs": 24,
+  "build": {
+    "envsetup": "build/envsetup.sh",
+    "lunch": "lunch custom_{device}-{target_release}-{variant}",
+    "command": "mka pixelos",
+    "clean_command": "make clean",
+    "installclean_command": "make installclean"
+  },
+  "output": {
+    "pattern": "*PixelOS*.zip"
+  }
+}

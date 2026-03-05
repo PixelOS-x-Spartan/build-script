@@ -1,0 +1,18 @@
+{
+  "name": "ROM_NAME",
+  "manifest": {
+    "url": "https://github.com/example/android_manifest.git",
+    "branch": "main"
+  },
+  "sync_jobs": 24,
+  "build": {
+    "envsetup": "build/envsetup.sh",
+    "lunch": "lunch romprefix_{device}-{target_release}-{variant}",
+    "command": "mka romtarget",
+    "clean_command": "make clean",
+    "installclean_command": "make installclean"
+  },
+  "output": {
+    "pattern": "*ROM_NAME*.zip"
+  }
+}
