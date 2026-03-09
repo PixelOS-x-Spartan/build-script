@@ -25,12 +25,8 @@ pip3 install requests
 - `--skip-sync` Skip source sync
 - `--skip-clone` Skip device repo cloning
 - `--skip-upload` Skip GoFile upload
-- `--installclean` Run incremental clean (`make installclean` or ROM-config override)
-- `--clean` Run full clean (`make clean` or ROM-config override)
 - `--clean-repos` Clean device repos before cloning
-- `--build-dir PATH` Custom build directory (default: `~/rom`)
-
-Note: `--installclean` and `--clean` are mutually exclusive.
+- `--build-dir PATH` Custom build directory (default: `~/<ROM name>`)
 
 ### Examples
 
@@ -47,8 +43,8 @@ Note: `--installclean` and `--clean` are mutually exclusive.
 # Incremental build (skip sync + clone)
 ./build.py spartan --skip-sync --skip-clone
 
-# Full clean build without upload
-./build.py spartan --clean --skip-upload
+# Build without upload
+./build.py spartan --skip-upload
 ```
 
 ## Device Configuration
@@ -93,11 +89,7 @@ Example (`roms/pixelos.json`):
   },
   "sync_jobs": 24,
   "build": {
-    "envsetup": "build/envsetup.sh",
-    "lunch": "lunch custom_{device}-{target_release}-{variant}",
-    "command": "mka pixelos",
-    "clean_command": "make clean",
-    "installclean_command": "make installclean"
+    "envsetup": "build/envsetup.sh"
   },
   "output": {
     "pattern": "*PixelOS*.zip"
@@ -129,3 +121,4 @@ export TELEGRAM_DISABLE=true
 - Automatic GoFile upload with SHA256
 - JSON-based device and ROM configs
 - Non-blocking Telegram notifications
+- Prompt-driven init/cleanup/build commands per run

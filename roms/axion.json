@@ -6,11 +6,7 @@
   },
   "sync_jobs": 24,
   "build": {
-    "envsetup": "build/envsetup.sh",
-    "lunch": "axion spartan user gms core",
-    "command": "ax -br",
-    "clean_command": "make clean",
-    "installclean_command": "make installclean"
+    "envsetup": "build/envsetup.sh"
   },
   "output": {
     "pattern": "*axion*.zip"

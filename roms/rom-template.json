@@ -6,11 +6,7 @@
   },
   "sync_jobs": 24,
   "build": {
-    "envsetup": "build/envsetup.sh",
-    "lunch": "lunch romprefix_{device}-{target_release}-{variant}",
-    "command": "mka romtarget",
-    "clean_command": "make clean",
-    "installclean_command": "make installclean"
+    "envsetup": "build/envsetup.sh"
   },
   "output": {
     "pattern": "*ROM_NAME*.zip"

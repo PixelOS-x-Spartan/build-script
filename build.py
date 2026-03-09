@@ -87,7 +87,7 @@ class RomConfig:
         for field in ["url", "branch"]:
             if field not in self.config_data["manifest"]:
                 raise ValueError(f"Missing manifest.{field} in ROM config")
-        for field in ["envsetup", "lunch", "command"]:
+        for field in ["envsetup"]:
             if field not in self.config_data["build"]:
                 raise ValueError(f"Missing build.{field} in ROM config")
         if "pattern" not in self.config_data["output"]:
@@ -107,20 +107,6 @@ class RomConfig:
 
     def get_envsetup(self) -> str:
         return self.config_data["build"]["envsetup"]
-
-    def get_lunch_command(self, device: str, target_release: str, variant: str) -> str:
-        return self.config_data["build"]["lunch"].format(
-            device=device, target_release=target_release, variant=variant
-        )
-
-    def get_build_command(self) -> str:
-        return self.config_data["build"]["command"]
-
-    def get_clean_command(self) -> str:
-        return self.config_data["build"].get("clean_command", "make clean")
-
-    def get_installclean_command(self) -> str:
-        return self.config_data["build"].get("installclean_command", "make installclean")
 
     def get_output_pattern(self) -> str:
         return self.config_data["output"]["pattern"]
@@ -403,13 +389,14 @@ class BuildOrchestrator:
         self.build_dir = build_dir
         self.gofile_download_link: Optional[str] = None
         self.current_log_file: Optional[Path] = None
+        self._error_occurred = False
 
         # Set notifier's orchestrator reference
         if self.notifier:
             self.notifier.orchestrator = self
 
-    def run(self, skip_sync: bool, skip_clone: bool, skip_upload: bool,
-            installclean: bool, clean: bool, clean_repos: bool):
+    def run(self, skip_sync: bool, skip_clone: bool, skip_upload: bool, clean_repos: bool,
+            lunch_cmd: str, clean_cmd: str, build_cmd: str):
         """Main build pipeline"""
         try:
             # Check requirements
@@ -463,7 +450,7 @@ class BuildOrchestrator:
             if monitor:
                 monitor.start()
             try:
-                self._build_rom(log_build, installclean, clean)
+                self._build_rom(log_build, lunch_cmd, clean_cmd, build_cmd)
             finally:
                 if monitor:
                     monitor.stop()
@@ -493,6 +480,7 @@ class BuildOrchestrator:
             self.cleanup()
             sys.exit(1)
         except Exception as e:
+            self._error_occurred = True
             print_error(f"Build failed: {e}")
             self._notify("Failed", f"❌ Error: {str(e)}")
 
@@ -501,7 +489,7 @@ class BuildOrchestrator:
             raise
         finally:
             # Cleanup temporary files on successful completion
-            if not hasattr(self, '_error_occurred'):
+            if not self._error_occurred:
                 self.cleanup()
 
     def _send_error_logs(self, exception: Exception):
@@ -609,7 +597,7 @@ class BuildOrchestrator:
 
         print_success(f"Successfully cloned {total} repositories")
 
-    def _build_rom(self, log_file: Path, installclean: bool, clean: bool):
+    def _build_rom(self, log_file: Path, lunch_cmd: str, clean_cmd: str, build_cmd: str):
         """Build ROM"""
         os.chdir(self.build_dir)
 
@@ -619,29 +607,17 @@ class BuildOrchestrator:
             env[key] = value
             print_status(f"Exported: {key}={value}")
 
-        # Source build environment and lunch
+        # Source build environment and run user-provided commands
         device = self.config.get_device_codename()
-        variant = self.config.get_build_variant()
-        target_release = self.config.get_target_release()
         envsetup = self.rom_config.get_envsetup()
-        lunch_cmd = self.rom_config.get_lunch_command(device, target_release, variant)
-        build_cmd = self.rom_config.get_build_command()
 
         print_status("Sourcing build environment...")
         print_status(f"Running {lunch_cmd}...")
-
-        # Determine clean command
-        clean_cmd = ""
-        if clean:
-            clean_cmd = self.rom_config.get_clean_command()
+        if clean_cmd:
             print_status(f"Running {clean_cmd}...")
-        elif installclean:
-            clean_cmd = self.rom_config.get_installclean_command()
-            print_status(f"Running {clean_cmd}...")
+        print_status(f"Running {build_cmd}...")
 
         # Build command
-        cores = os.cpu_count() or 8
-        print_status(f"Starting build with {cores} parallel jobs...")
         print_status("Building ROM (this will take several hours)...")
 
         # Run build in bash and stream via PTY to preserve live progress output.
@@ -651,11 +627,23 @@ cd {self.build_dir}
 source {envsetup}
 {lunch_cmd}
 {clean_cmd}
-{build_cmd} -j{cores}
+{build_cmd}
 """
 
         if self._run_with_pty_logging(build_script, log_file, cwd=self.build_dir, env=env) != 0:
-            raise RuntimeError("ROM build failed!")
+            tail_output = ""
+            try:
+                with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()[-40:]
+                    tail_output = "".join(lines).strip()
+            except Exception:
+                pass
+
+            print_error(f"Build log preserved at: {log_file}")
+            if tail_output:
+                print_error("Last build log lines:")
+                print(tail_output)
+            raise RuntimeError(f"ROM build failed! Check log: {log_file}")
 
         # Find output file
         output_dir = self.build_dir / "out" / "target" / "product" / device
@@ -840,6 +828,32 @@ def get_telegram_credentials() -> Tuple[Optional[str], Optional[str]]:
     return token, chat_id
 
 
+def get_build_commands(config: BuildConfig) -> Tuple[str, str, str]:
+    """Prompt for init/lunch command, optional cleanup command, and build command."""
+    device = config.get_device_codename()
+    variant = config.get_build_variant()
+    target_release = config.get_target_release()
+
+    print("━" * 40)
+    print("  Build Commands")
+    print("━" * 40)
+    print(f"Device: {device} | Variant: {variant} | Target: {target_release}")
+
+    lunch_cmd = input("Enter lunch/init command: ").strip()
+    if not lunch_cmd:
+        raise ValueError("Lunch/init command is required")
+
+    clean_cmd = input(
+        "Enter cleanup command (optional: make installclean/make clean/make clobber): "
+    ).strip()
+
+    build_cmd = input("Enter build command (e.g., mka bacon / ax -br): ").strip()
+    if not build_cmd:
+        raise ValueError("Build command is required")
+
+    return lunch_cmd, clean_cmd, build_cmd
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
@@ -854,22 +868,12 @@ def main():
                        help="Skip device repo cloning")
     parser.add_argument("--skip-upload", action="store_true",
                        help="Skip GoFile upload")
-    parser.add_argument("--installclean", action="store_true",
-                       help="Clean installed files (make installclean)")
-    parser.add_argument("--clean", action="store_true",
-                       help="Full clean build (make clean)")
     parser.add_argument("--clean-repos", action="store_true",
                        help="Clean device repos before cloning")
     parser.add_argument("--build-dir", type=Path, default=None,
                        help="Build directory (default: ~/<ROM name>)")
 
     args = parser.parse_args()
-
-    # Validate arguments
-    if args.installclean and args.clean:
-        print_error("Cannot use both --installclean and --clean together")
-        print_error("Use --installclean for incremental rebuild or --clean for full clean")
-        sys.exit(1)
 
     # Load ROM config
     try:
@@ -904,12 +908,9 @@ def main():
     print(f"  Sync Jobs: {rom_config.get_sync_jobs()}")
     print(f"  Build Variant: {config.get_build_variant()}")
     print(f"  Target Release: {config.get_target_release()}")
-    print(f"  Build Command: {rom_config.get_build_command()}")
     print(f"  Skip Sync: {args.skip_sync}")
     print(f"  Skip Clone: {args.skip_clone}")
     print(f"  Skip Upload: {args.skip_upload}")
-    print(f"  Install Clean: {args.installclean}")
-    print(f"  Full Clean: {args.clean}")
     print()
 
     # Get Telegram credentials
@@ -918,6 +919,20 @@ def main():
         print_status("Telegram notifications enabled")
     else:
         print_status("Telegram notifications disabled for this build")
+
+    # Get build commands interactively
+    try:
+        lunch_cmd, clean_cmd, build_cmd = get_build_commands(config)
+    except Exception as e:
+        print_error(f"Invalid command input: {e}")
+        sys.exit(1)
+
+    print()
+    print("Selected Commands:")
+    print(f"  Init/Lunch: {lunch_cmd}")
+    print(f"  Cleanup: {clean_cmd or '(none)'}")
+    print(f"  Build: {build_cmd}")
+    print()
 
     # Confirmation
     response = input("Continue with build? (y/N): ").strip().lower()
@@ -936,9 +951,10 @@ def main():
         skip_sync=args.skip_sync,
         skip_clone=args.skip_clone,
         skip_upload=args.skip_upload,
-        installclean=args.installclean,
-        clean=args.clean,
-        clean_repos=args.clean_repos
+        clean_repos=args.clean_repos,
+        lunch_cmd=lunch_cmd,
+        clean_cmd=clean_cmd,
+        build_cmd=build_cmd
     )
 
 
