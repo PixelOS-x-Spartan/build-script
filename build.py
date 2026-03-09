@@ -419,10 +419,14 @@ class BuildOrchestrator:
                 self._notify("Syncing", "🔄 Starting source sync")
                 log_sync = Path(f"/tmp/build_sync_{os.getpid()}.log")
                 self.current_log_file = log_sync
-                monitor = ProgressMonitor(log_sync, self.notifier, "Syncing")
-                monitor.start()
-                self._sync_sources(log_sync)
-                monitor.stop()
+                monitor = ProgressMonitor(log_sync, self.notifier, "Syncing") if self.notifier else None
+                if monitor:
+                    monitor.start()
+                try:
+                    self._sync_sources(log_sync)
+                finally:
+                    if monitor:
+                        monitor.stop()
                 self._notify("Syncing", "✅ Complete")
             else:
                 if not (self.build_dir / ".repo").exists():
@@ -449,10 +453,14 @@ class BuildOrchestrator:
             self._notify("Compiling", "🔨 Starting compilation")
             log_build = Path(f"/tmp/build_mka_{os.getpid()}.log")
             self.current_log_file = log_build
-            monitor = ProgressMonitor(log_build, self.notifier, "Compiling")
-            monitor.start()
-            self._build_rom(log_build, installclean, clean)
-            monitor.stop()
+            monitor = ProgressMonitor(log_build, self.notifier, "Compiling") if self.notifier else None
+            if monitor:
+                monitor.start()
+            try:
+                self._build_rom(log_build, installclean, clean)
+            finally:
+                if monitor:
+                    monitor.stop()
             self._notify("Compiling", "✅ Complete")
 
             # Upload to GoFile
@@ -549,14 +557,10 @@ class BuildOrchestrator:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to initialize repository: {result.stderr}")
 
-        # Sync sources (use tee to show output and log it)
+        # Sync sources with PTY so repo keeps interactive progress output.
         print_status(f"Syncing sources with {sync_jobs} jobs (this may take a while)...")
-        sync_cmd = f"set -o pipefail; repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j{sync_jobs} 2>&1 | tee {log_file}"
-        result = subprocess.run(
-            ["bash", "-c", sync_cmd],
-            cwd=self.build_dir
-        )
-        if result.returncode != 0:
+        sync_cmd = f"repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j{sync_jobs}"
+        if self._run_with_pty_logging(sync_cmd, log_file, cwd=self.build_dir) != 0:
             raise RuntimeError("Failed to sync sources")
 
         print_success("ROM sources synced successfully")
@@ -634,22 +638,17 @@ class BuildOrchestrator:
         print_status(f"Starting build with {cores} parallel jobs...")
         print_status("Building ROM (this will take several hours)...")
 
-        # Run build in bash with sourcing (use tee to show output and log it)
+        # Run build in bash and stream via PTY to preserve live progress output.
         build_script = f"""
 set -eo pipefail
 cd {self.build_dir}
 source {envsetup}
 {lunch_cmd}
 {clean_cmd}
-{build_cmd} -j{cores} 2>&1 | tee {log_file}
+{build_cmd} -j{cores}
 """
 
-        result = subprocess.run(
-            ["bash", "-c", build_script],
-            env=env
-        )
-
-        if result.returncode != 0:
+        if self._run_with_pty_logging(build_script, log_file, cwd=self.build_dir, env=env) != 0:
             raise RuntimeError("ROM build failed!")
 
         # Find output file
@@ -666,6 +665,56 @@ source {envsetup}
             print_status(f"File size: {size_mb:.2f} MB")
         else:
             print_warning("ROM file not found in output directory")
+
+    def _run_with_pty_logging(self, command: str, log_file: Path, cwd: Optional[Path] = None,
+                              env: Optional[Dict[str, str]] = None) -> int:
+        """Run command in a PTY, mirroring live output to terminal and log file."""
+        import pty
+        import select
+
+        master_fd, slave_fd = pty.openpty()
+        process = None
+
+        try:
+            with open(log_file, "w", encoding="utf-8", errors="ignore", buffering=1) as log_handle:
+                process = subprocess.Popen(
+                    ["bash", "-lc", command],
+                    cwd=cwd,
+                    env=env,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True
+                )
+                os.close(slave_fd)
+
+                while True:
+                    ready, _, _ = select.select([master_fd], [], [], 0.2)
+                    if master_fd in ready:
+                        try:
+                            chunk = os.read(master_fd, 4096)
+                        except OSError:
+                            chunk = b""
+
+                        if chunk:
+                            text = chunk.decode("utf-8", errors="ignore")
+                            sys.stdout.write(text)
+                            sys.stdout.flush()
+                            log_handle.write(text)
+                        elif process.poll() is not None:
+                            break
+
+                    if process.poll() is not None and not ready:
+                        break
+
+                return process.wait()
+        finally:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+            if process and process.poll() is None:
+                process.kill()
 
     def _upload_gofile(self):
         """Upload ROM to GoFile and return download link"""
