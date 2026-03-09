@@ -21,7 +21,7 @@ import requests
 
 # Constants
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_BUILD_DIR = Path.home() / "rom"
+DEFAULT_BUILD_DIR = Path.home()
 
 # ANSI color codes
 class Colors:
@@ -46,6 +46,12 @@ def print_warning(msg: str):
 def print_error(msg: str):
     """Print error message"""
     print(f"{Colors.RED}[ERROR]{Colors.NC} {msg}")
+
+
+def sanitize_dir_name(name: str) -> str:
+    """Create a filesystem-safe directory name from ROM display name."""
+    safe_name = re.sub(r'[^\w.-]+', '_', name).strip('._')
+    return safe_name or "rom"
 
 
 class RomConfig:
@@ -855,7 +861,7 @@ def main():
     parser.add_argument("--clean-repos", action="store_true",
                        help="Clean device repos before cloning")
     parser.add_argument("--build-dir", type=Path, default=None,
-                       help="Build directory (default: ~/rom)")
+                       help="Build directory (default: ~/<ROM name>)")
 
     args = parser.parse_args()
 
@@ -873,7 +879,8 @@ def main():
         sys.exit(1)
 
     rom_name = rom_config.get_name()
-    build_dir = args.build_dir or DEFAULT_BUILD_DIR
+    default_rom_dir = DEFAULT_BUILD_DIR / sanitize_dir_name(rom_name)
+    build_dir = args.build_dir or default_rom_dir
 
     # Display header
     print(f"{Colors.BLUE}================================{Colors.NC}")
